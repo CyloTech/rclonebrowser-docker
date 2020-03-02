@@ -5,17 +5,23 @@
 FROM jlesage/baseimage-gui:alpine-3.9-glibc
 
 # Define environment variables
-ENV RCLONE_VERSION=current
+ENV RCLONE_INSTALL_VERSION=current
 ENV ARCH=amd64
 
 # Define working directory.
 WORKDIR /tmp
 
+# Install our hard link from our no_local repo
+COPY ./scripts/rclone /usr/bin
+
 # Install Rclone Browser dependencies
 
-RUN apk --no-cache add \
+RUN echo "make sure you run cp ~/Development/Current/rclone/bin/rclone ~/Development/Current/rclonebrowser-app/scripts/"
+
+RUN add-pkg \
       ca-certificates \
       fuse \
+      curl \
       wget \
       qt5-qtbase \
       qt5-qtbase-x11 \
@@ -23,13 +29,9 @@ RUN apk --no-cache add \
       libgcc \
       dbus \
       xterm \
-    && cd /tmp \
-    && wget -q http://downloads.rclone.org/rclone-${RCLONE_VERSION}-linux-${ARCH}.zip \
-    && unzip /tmp/rclone-${RCLONE_VERSION}-linux-${ARCH}.zip \
-    && mv /tmp/rclone-*-linux-${ARCH}/rclone /usr/bin \
-    && rm -r /tmp/rclone* && \
-
-    apk add --no-cache --virtual=build-dependencies \
+      bash \
+      bc \
+    && add-pkg --virtual=build-dependencies \
         build-base \
         cmake \
         make \
@@ -47,7 +49,7 @@ RUN apk --no-cache add \
     cp /tmp/build/build/rclone-browser /usr/bin  && \
 
     # cleanup
-     apk del --purge build-dependencies && \
+     del-pkg build-dependencies && \
     rm -rf /tmp/*
  
 # Maximize only the main/initial window.
@@ -68,9 +70,8 @@ COPY VERSION /
 ENV APP_NAME="RcloneBrowser" \
     S6_KILL_GRACETIME=8000
 
-# Define mountable directories.
-VOLUME ["/config"]
-VOLUME ["/shared"]
+RUN mkdir /scripts
+COPY scripts/ /scripts/
 
 # Metadata.
 LABEL \

@@ -142,9 +142,10 @@ automount_rclone
 xrdb /scripts/Xresources
 
 if [[ ! -f /etc/app_configured ]]; then
+    # The appbox-callback service sends the installed callback after
+    # cont-init, so a slow or rejected callback cannot keep Rclone Browser
+    # from starting. The flag is set first so a crash before the marker
+    # cannot lose it.
+    touch /etc/appbox_callback_pending
     touch /etc/app_configured
-    until [[ $(curl -i -H "Accept: application/json" -H "Content-Type:application/json" -X POST "https://api.cylo.io/v1/apps/installed/${INSTANCE_ID}" | grep '200') ]]
-        do
-        sleep 5
-    done
 fi

@@ -73,6 +73,7 @@ RUN \
 
 # Add files.
 COPY rootfs/ /
+RUN chmod 755 /usr/local/bin/appbox-installed-callback /etc/services.d/appbox-callback/run
 COPY VERSION /
 
 # Set environment variables.

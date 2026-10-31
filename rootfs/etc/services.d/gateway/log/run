@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/bin/s6-log n5 s1000000 T /logs/gateway

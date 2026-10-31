@@ -1,0 +1,52 @@
+# sshd for the Rclone app. The one account, rclone, has rclone-ssh as its
+# login shell and as a forced command, so every session runs a limited
+# set of rclone commands and never a shell.
+
+# Turns password logins on or off; written at start-up and by
+# /moduser.sh. Passwords shorter than 12 characters keep SSH off.
+Include /run/appbox/sshd_auth.conf
+
+HostKey /rclone_config/.appbox/ssh/ssh_host_ed25519_key
+HostKey /rclone_config/.appbox/ssh/ssh_host_rsa_key
+PidFile /run/sshd.pid
+
+AllowUsers rclone
+PermitRootLogin no
+PubkeyAuthentication no
+AuthorizedKeysFile none
+HostbasedAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+StrictModes yes
+
+ForceCommand /usr/local/bin/rclone-ssh
+PermitTTY yes
+PermitUserEnvironment no
+PermitUserRC no
+
+# Only rclone's sign-in port may be forwarded, for adding OAuth remotes
+# with "rclone config".
+AllowTcpForwarding local
+PermitOpen 127.0.0.1:53682 localhost:53682
+PermitListen none
+GatewayPorts no
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+X11Forwarding no
+PermitTunnel no
+
+# No Subsystem lines: SFTP and SCP aren't available.
+
+MaxAuthTries 3
+MaxSessions 4
+LoginGraceTime 20
+MaxStartups 3:50:10
+PerSourceMaxStartups 3
+PerSourcePenalties yes
+ClientAliveInterval 60
+ClientAliveCountMax 3
+
+PrintMotd no
+PrintLastLog no
+UseDNS no
+LogLevel INFO

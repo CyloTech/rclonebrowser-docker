@@ -6,10 +6,8 @@
 #     the callback token;
 #   - the appbox-callback s6 service sends a pending callback once, clears the
 #     flag and then idles;
-#   - the first-boot block of cont-init.d/0-rclonebrowser.sh only marks the
-#     callback pending and finishes without calling the API. The rest of that
-#     script (FUSE, automount services, chown of system paths) needs the real
-#     image, so only its tail from the first-boot check is run.
+#   - cont-init.d/90-appbox-callback only marks the callback pending on the
+#     first boot and finishes without calling the API.
 #
 # Usage: tests/test-installed-callback.sh
 set -u
@@ -180,12 +178,12 @@ stop_mock
 # --- appbox-callback service ---------------------------------------------------
 
 service_run="${repo_root}/rootfs/etc/services.d/appbox-callback/run"
-cont_init="${repo_root}/rootfs/etc/cont-init.d/0-rclonebrowser.sh"
+cont_init="${repo_root}/rootfs/etc/cont-init.d/90-appbox-callback"
 # Commands the cont-init script needs that only exist in the image are stubbed
 # out, and image paths are moved into the sandbox (@WORK@ is the sandbox).
 cont_init_stubs=()
 cont_init_sed=()
-cont_init_from='^if \[\[ ! -f /etc/app_configured \]\]; then$'
+cont_init_from=''
 
 service_case() {
     local codes=$1 want_requests=$2 flag=$3
@@ -265,9 +263,9 @@ cont_init_case fresh
 cont_init_case restart
 
 if grep -q 'apps/installed' "${cont_init}"; then
-    fail "0-rclonebrowser.sh still calls the installed callback"
+    fail "90-appbox-callback still calls the installed callback"
 else
-    pass "0-rclonebrowser.sh only marks the callback pending"
+    pass "90-appbox-callback only marks the callback pending"
 fi
 
 # The pending flag is set before the configured marker, so a crash between the
@@ -275,9 +273,9 @@ fi
 pending_line=$(grep -n 'touch /etc/appbox_callback_pending' "${cont_init}" | head -n 1 | cut -d: -f1)
 configured_line=$(grep -n 'touch /etc/app_configured' "${cont_init}" | head -n 1 | cut -d: -f1)
 if [[ -n "${pending_line}" && -n "${configured_line}" && "${pending_line}" -lt "${configured_line}" ]]; then
-    pass "0-rclonebrowser.sh marks the callback pending before /etc/app_configured"
+    pass "90-appbox-callback marks the callback pending before /etc/app_configured"
 else
-    fail "0-rclonebrowser.sh must touch /etc/appbox_callback_pending before /etc/app_configured"
+    fail "90-appbox-callback must touch /etc/appbox_callback_pending before /etc/app_configured"
 fi
 
 exit "${failures}"

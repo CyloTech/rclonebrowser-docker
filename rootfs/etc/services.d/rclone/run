@@ -1,0 +1,15 @@
+#!/bin/sh
+# rclone's API, which owns every mount. It listens on localhost only and
+# accepts just the gateway's internal credentials.
+# Both rclone and sshd log to stderr; send it to the log service.
+exec 2>&1
+/usr/local/bin/appbox-rclone cleanup-mounts
+exec env -i PATH=/usr/bin:/bin HOME=/home/rclone USER=rclone LANG=C.UTF-8 \
+    RCLONE_DRIVE_ACKNOWLEDGE_ABUSE=true \
+    /usr/bin/s6-setuidgid rclone /usr/bin/rclone rcd \
+    --config /rclone_config/rclone.conf \
+    --cache-dir /cache \
+    --rc-addr 127.0.0.1:5572 \
+    --rc-htpasswd /run/appbox/rc.htpasswd \
+    --rc-job-expire-duration 1h \
+    --log-level INFO

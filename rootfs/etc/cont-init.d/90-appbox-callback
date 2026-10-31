@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# On the first boot of a container, mark the installed callback as pending.
+# The appbox-callback service sends it after start-up, so a slow or rejected
+# callback can't keep the app from starting. The flag is set before the
+# marker so a crash between the two can't lose it.
+
+if [[ ! -f /etc/app_configured ]]; then
+    touch /etc/appbox_callback_pending
+    touch /etc/app_configured
+fi

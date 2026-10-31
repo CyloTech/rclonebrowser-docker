@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv sh
+# The web UI and the filter in front of rclone's API. It gets only the
+# domain and SSH port, for the messages it shows.
+exec env -i PATH=/usr/bin:/bin APPBOX_DOMAIN="${DOMAIN:-}" APPBOX_SSH_PORT="${PORT:-}" \
+    /usr/bin/s6-setuidgid gateway /usr/local/bin/appbox-rclone gateway

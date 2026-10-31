@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv sh
+# SSH on the app's public port. Logins run rclone commands only.
+# Both rclone and sshd log to stderr; send it to the log service.
+exec 2>&1
+port="${PORT:-2222}"
+case "${port}" in
+    '' | *[!0-9]*) port=2222 ;;
+esac
+exec env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config_appbox -p "${port}"

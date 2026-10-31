@@ -1,0 +1,80 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Prepares the Rclone app on every start: the rclone user, folder
+# ownership, the login password, sshd and the internal credentials for
+# rclone's API. Nothing here runs or sources files from the app's data.
+set -euo pipefail
+
+user_id=${USER_ID:-1000}
+group_id=${GROUP_ID:-1000}
+case "${user_id}${group_id}" in
+    *[!0-9]*) echo "USER_ID and GROUP_ID must be numbers" >&2; exit 1 ;;
+esac
+state=/rclone_config/.appbox
+
+# The rclone user runs rclone and the SSH sessions. Its login shell runs
+# rclone commands only, and its home is owned by root so no SSH files
+# can be planted there.
+deluser rclone 2>/dev/null || true
+delgroup rclone 2>/dev/null || true
+group=$(awk -F: -v gid="${group_id}" '$3 == gid { print $1; exit }' /etc/group)
+if [[ -z "${group}" ]]; then
+    addgroup -g "${group_id}" rclone
+    group=rclone
+fi
+adduser -D -H -u "${user_id}" -G "${group}" -h /home/rclone -s /usr/local/bin/rclone-ssh rclone
+mkdir -p /home/rclone
+chown root:root /home/rclone
+chmod 755 /home/rclone
+
+mkdir -p /rclone_config /cache /shared_mounts /logs/rclone /logs/gateway /logs/sshd
+find /rclone_config -path "${state}" -prune -o -exec chown -h "rclone:${group}" {} +
+chown "rclone:${group}" /cache
+if [[ "$(stat -c %u /shared_mounts)" != "${user_id}" ]]; then
+    chown "rclone:${group}" /shared_mounts
+fi
+# Logs left by the Rclone Browser versions.
+rm -rf /logs/automount_* /logs/rclone-browser.log
+
+if [[ ! -c /dev/fuse ]]; then
+    echo "/dev/fuse is missing, so mounts won't work" >&2
+fi
+
+# Appbox state: the password hashes and saved mounts and options belong
+# to the gateway; the SSH host keys stay with root.
+mkdir -p "${state}/ssh"
+chown gateway:gateway "${state}"
+chmod 700 "${state}"
+chown root:root "${state}/ssh"
+chmod 700 "${state}/ssh"
+for f in automounts.json options.json password.bcrypt; do
+    if [[ -e "${state}/${f}" ]]; then
+        chown gateway:gateway "${state}/${f}"
+    fi
+done
+for type in ed25519 rsa; do
+    key="${state}/ssh/ssh_host_${type}_key"
+    if [[ ! -s "${key}" ]]; then
+        rm -f "${key}" "${key}.pub"
+        if [[ "${type}" == rsa ]]; then
+            ssh-keygen -q -t rsa -b 3072 -N '' -f "${key}"
+        else
+            ssh-keygen -q -t ed25519 -N '' -f "${key}"
+        fi
+    fi
+done
+
+# The first start takes the password chosen at install time. After that
+# the stored password wins, so a reset made with /moduser.sh survives
+# restarts.
+if [[ ! -s "${state}/password.bcrypt" || ! -s "${state}/password.crypt" ]]; then
+    if [[ -n "${VNC_PASSWORD:-}" ]]; then
+        printf '%s' "${VNC_PASSWORD}" | /usr/local/bin/appbox-rclone set-password
+    else
+        echo "No password is set. Use /moduser.sh to set one." >&2
+    fi
+fi
+/usr/local/bin/appbox-rclone apply-password
+
+/usr/local/bin/appbox-rclone rc-credentials
+/usr/local/bin/appbox-rclone prepare-migration

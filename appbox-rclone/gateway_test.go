@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,8 +155,10 @@ func TestGatewayRejectsPublicAddresses(t *testing.T) {
 
 func TestGatewayAuth(t *testing.T) {
 	g, fake, _ := setupGateway(t)
-	if r := doRC(t, g, "core/version", "", nil); r.status != http.StatusUnauthorized {
-		t.Errorf("no auth: %d", r.status)
+	for i := 0; i < 20; i++ {
+		if r := doRC(t, g, "core/version", "", nil); r.status != http.StatusUnauthorized {
+			t.Errorf("no auth: %d", r.status)
+		}
 	}
 	if r := doRC(t, g, "core/version", "wrong", nil); r.status != http.StatusUnauthorized {
 		t.Errorf("wrong password: %d", r.status)
@@ -183,24 +184,25 @@ func TestGatewayPolicy(t *testing.T) {
 		params map[string]any
 		status int
 	}{
-		{"core/quit", nil, http.StatusForbidden},
-		{"backend/command", map[string]any{"command": "x", "fs": "a:"}, http.StatusForbidden},
-		{"pluginsctl/addPlugin", nil, http.StatusForbidden},
-		{"debug/set-gc-percent", nil, http.StatusForbidden},
-		{"mount/unmountall", nil, http.StatusForbidden},
-		{"core/command", map[string]any{"command": "ls", "arg": []string{"/etc"}}, http.StatusForbidden},
-		{"core/command", map[string]any{"command": "selfupdate", "arg": []string{"--check"}}, http.StatusForbidden},
-		{"core/command", map[string]any{"command": "cat", "arg": []string{"/etc/passwd"}}, http.StatusForbidden},
-		{"core/command", map[string]any{"command": "cat", "arg": []string{s.ConfigPath}, "opt": map[string]any{"config": "/x"}}, http.StatusForbidden},
+		{"rc/noopauth", nil, http.StatusOK},
+		{"core/quit", nil, http.StatusBadRequest},
+		{"backend/command", map[string]any{"command": "x", "fs": "a:"}, http.StatusBadRequest},
+		{"pluginsctl/addPlugin", nil, http.StatusBadRequest},
+		{"debug/set-gc-percent", nil, http.StatusBadRequest},
+		{"mount/unmountall", nil, http.StatusBadRequest},
+		{"core/command", map[string]any{"command": "ls", "arg": []string{"/etc"}}, http.StatusBadRequest},
+		{"core/command", map[string]any{"command": "selfupdate", "arg": []string{"--check"}}, http.StatusBadRequest},
+		{"core/command", map[string]any{"command": "cat", "arg": []string{"/etc/passwd"}}, http.StatusBadRequest},
+		{"core/command", map[string]any{"command": "cat", "arg": []string{s.ConfigPath}, "opt": map[string]any{"config": "/x"}}, http.StatusBadRequest},
 		{"core/command", map[string]any{"command": "cat", "arg": []string{s.ConfigPath}}, http.StatusOK},
-		{"config/setpath", map[string]any{"path": "/tmp/other.conf"}, http.StatusForbidden},
+		{"config/setpath", map[string]any{"path": "/tmp/other.conf"}, http.StatusBadRequest},
 		{"config/setpath", map[string]any{"path": s.ConfigPath}, http.StatusOK},
-		{"options/set", map[string]any{"rc": map[string]any{"NoAuth": true}}, http.StatusForbidden},
-		{"options/set", map[string]any{"log": map[string]any{"File": "/etc/x"}}, http.StatusForbidden},
-		{"options/set", map[string]any{"main": map[string]any{"PasswordCommand": []string{"id"}}}, http.StatusForbidden},
+		{"options/set", map[string]any{"rc": map[string]any{"NoAuth": true}}, http.StatusBadRequest},
+		{"options/set", map[string]any{"log": map[string]any{"File": "/etc/x"}}, http.StatusBadRequest},
+		{"options/set", map[string]any{"main": map[string]any{"PasswordCommand": []string{"id"}}}, http.StatusBadRequest},
 		{"options/set", map[string]any{"main": map[string]any{"Transfers": 8}}, http.StatusOK},
-		{"operations/list", map[string]any{"fs": ":local:/etc", "remote": ""}, http.StatusForbidden},
-		{"sync/copy", map[string]any{"srcFs": ":sftp,host=x:", "dstFs": "a:"}, http.StatusForbidden},
+		{"operations/list", map[string]any{"fs": ":local:/etc", "remote": ""}, http.StatusBadRequest},
+		{"sync/copy", map[string]any{"srcFs": ":sftp,host=x:", "dstFs": "a:"}, http.StatusBadRequest},
 		{"operations/list", map[string]any{"fs": "gdrive:", "remote": ""}, http.StatusOK},
 	}
 	for _, tc := range cases {
@@ -366,13 +368,12 @@ func TestGatewayGUI(t *testing.T) {
 	if rec := get("/../../etc/passwd", nil); strings.Contains(rec.Body.String(), "root:") {
 		t.Error("path traversal")
 	}
-	rec := get("/login?reason=auth", http.Header{"X-Forwarded-Proto": {"https"}})
-	loc, _ := url.Parse(rec.Header().Get("Location"))
-	if rec.Code != http.StatusFound || loc.Query().Get("url") != "https://rclone.example.appboxes.co/rc" || loc.Query().Get("reason") != "auth" {
-		t.Errorf("login redirect: %d %s", rec.Code, rec.Header().Get("Location"))
-	}
-	if rec := get("/login?url=https://x/rc", nil); rec.Code != http.StatusOK {
-		t.Errorf("login with url: %d", rec.Code)
+	for _, path := range []string{"/", "/login", "/index.html", "/mounts"} {
+		rec := get(path, nil)
+		body := rec.Body.String()
+		if rec.Code != http.StatusOK || !strings.Contains(body, `location.origin+"/rc"`) || !strings.Contains(body, "app") {
+			t.Errorf("%s doesn't seed the API address: %d %q", path, rec.Code, body)
+		}
 	}
 }
 

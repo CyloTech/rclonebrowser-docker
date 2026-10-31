@@ -93,13 +93,15 @@ check "state is owned by the gateway" docker exec "${app}" sh -c '[ "$(stat -c %
 
 # --- web UI ---------------------------------------------------------------------
 check "GUI page is served" docker exec "${client}" sh -c "curl -fsS http://${app}:5800/ | grep -qi '<html'"
-loc=$(docker exec "${client}" curl -s -o /dev/null -w '%{redirect_url}' -H 'X-Forwarded-Proto: https' "http://${app}:5800/login")
-[[ "${loc}" == *"url=https%3A%2F%2F${app}%3A5800%2Frc"* ]] && pass "login page gets the API address" || fail "login redirect: ${loc}"
+check "login page gets the API address" docker exec "${client}" sh -c "curl -fsS http://${app}:5800/login | grep -q 'location.origin+\"/rc\"'"
+for _ in $(seq 1 12); do docker exec "${client}" curl -s -o /dev/null -X POST "http://${app}:5800/rc/core/version"; done
+[[ $(status_of "$(rc "${app}" "${pass1}" core/version)") == 200 ]] && pass "empty logins don't lock anyone out" || fail "empty logins counted"
 [[ $(status_of "$(rc "${app}" wrong core/version)") == 401 ]] && pass "wrong password refused" || fail "wrong password"
 r=$(rc "${app}" "${pass1}" core/version)
 [[ $(status_of "$r") == 200 && "$r" == *'"version": "v1.75.2"'* ]] && pass "login works, rclone v1.75.2" || fail "core/version: $r"
-[[ $(status_of "$(rc "${app}" "${pass1}" core/quit)") == 403 ]] && pass "core/quit blocked" || fail "core/quit"
-[[ $(status_of "$(rc "${app}" "${pass1}" core/command '{"command":"ls","arg":["/etc"]}')") == 403 ]] && pass "core/command blocked" || fail "core/command"
+[[ $(status_of "$(rc "${app}" "${pass1}" rc/noopauth)") == 200 ]] && pass "web UI login check (rc/noopauth) allowed" || fail "rc/noopauth"
+[[ $(status_of "$(rc "${app}" "${pass1}" core/quit)") == 400 ]] && pass "core/quit blocked" || fail "core/quit"
+[[ $(status_of "$(rc "${app}" "${pass1}" core/command '{"command":"ls","arg":["/etc"]}')") == 400 ]] && pass "core/command blocked" || fail "core/command"
 r=$(rc "${app}" "${pass1}" core/disks)
 [[ "$r" == *'/APPBOX_DATA'* && "$r" != *'"/"'* ]] && pass "core/disks lists the app's folders only" || fail "core/disks: $r"
 

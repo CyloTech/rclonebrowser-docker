@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +25,7 @@ const maxRCBody = 8 << 20
 // rcAllowed lists the rclone API calls the web UI may make. Anything new
 // in a later rclone release stays blocked until it is reviewed here.
 var rcAllowed = map[string]bool{
-	"rc/noop": true, "core/version": true, "core/stats": true, "core/transferred": true,
+	"rc/noop": true, "rc/noopauth": true, "core/version": true, "core/stats": true, "core/transferred": true,
 	"core/stats-reset": true, "core/bwlimit": true, "core/disks": true, "core/command": true,
 	"config/listremotes": true, "config/providers": true, "config/get": true, "config/dump": true,
 	"config/paths": true, "config/create": true, "config/update": true, "config/delete": true,
@@ -136,34 +135,16 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
 	case r.URL.Path == "/rc" || strings.HasPrefix(r.URL.Path, "/rc/"):
 		g.serveRC(w, r)
-	case r.URL.Path == "/login" && r.URL.Query().Get("url") == "":
-		g.redirectLogin(w, r)
 	default:
 		g.serveGUI(w, r)
 	}
 }
 
-var hostPattern = regexp.MustCompile(`^[A-Za-z0-9.\-]+(:[0-9]+)?$`)
-
-// redirectLogin fills in the API address on the login page, so customers
-// only enter their username and password.
-func (g *gateway) redirectLogin(w http.ResponseWriter, r *http.Request) {
-	scheme := r.Header.Get("X-Forwarded-Proto")
-	if scheme != "https" && scheme != "http" {
-		scheme = "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-	}
-	host := r.Host
-	if !hostPattern.MatchString(host) {
-		http.Error(w, "bad host", http.StatusBadRequest)
-		return
-	}
-	q := r.URL.Query()
-	q.Set("url", scheme+"://"+host+"/rc")
-	http.Redirect(w, r, "/login?"+q.Encode(), http.StatusFound)
-}
+// seedAPIAddress runs in the browser before Rclone Web starts. Rclone Web
+// asks for the address of the rclone API on its login page and keeps it
+// in localStorage; this fills in this app's address, so customers only
+// enter their username and password.
+const seedAPIAddress = `<script>(function(){try{var k="lite-auth-store",u=location.origin+"/rc",s=JSON.parse(localStorage.getItem(k)||"null")||{state:{},version:0};s.state=s.state||{};if(s.state.url!==u){s.state.url=u;localStorage.setItem(k,JSON.stringify(s))}}catch(e){}})();</script>`
 
 func (g *gateway) serveGUI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -172,7 +153,7 @@ func (g *gateway) serveGUI(w http.ResponseWriter, r *http.Request) {
 	}
 	clean := filepath.Clean("/" + r.URL.Path)
 	file := filepath.Join(g.s.GUIDir, clean)
-	if fi, err := os.Stat(file); err == nil && !fi.IsDir() {
+	if fi, err := os.Stat(file); err == nil && !fi.IsDir() && clean != "/index.html" {
 		if strings.HasPrefix(clean, "/assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
@@ -180,11 +161,30 @@ func (g *gateway) serveGUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The GUI routes pages in the browser, so unknown paths get the app.
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeFile(w, r, filepath.Join(g.s.GUIDir, "index.html"))
+	g.serveIndex(w, r)
 }
 
-// rcError answers in the same shape as rclone's own errors.
+func (g *gateway) serveIndex(w http.ResponseWriter, r *http.Request) {
+	page, err := os.ReadFile(filepath.Join(g.s.GUIDir, "index.html"))
+	if err != nil {
+		http.Error(w, "the web UI is missing", http.StatusInternalServerError)
+		return
+	}
+	html := string(page)
+	if i := strings.Index(html, "<head>"); i >= 0 {
+		html = html[:i+len("<head>")] + seedAPIAddress + html[i+len("<head>"):]
+	} else {
+		html = seedAPIAddress + html
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Method != http.MethodHead {
+		io.WriteString(w, html)
+	}
+}
+
+// rcError answers in the same shape as rclone's own errors. Refusals use
+// 400: Rclone Web treats 401 and 403 as a lost login and signs out.
 func rcError(w http.ResponseWriter, status int, path, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -218,14 +218,20 @@ func (g *gateway) serveRC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, pass, ok := r.BasicAuth()
-	if !ok || user != g.s.LoginUser || !g.login.check(pass) {
+	if !ok || (user == "" && pass == "") {
+		// Rclone Web tries an empty login when it opens; that isn't a
+		// guess, so it doesn't count towards the limit.
+		rcError(w, http.StatusUnauthorized, path, "Enter your username and password.")
+		return
+	}
+	if user != g.s.LoginUser || !g.login.check(pass) {
 		g.limiter.fail(ip)
 		g.logger.Printf("failed login from %s", ip)
 		rcError(w, http.StatusUnauthorized, path, "Wrong username or password.")
 		return
 	}
 	if !rcAllowed[path] {
-		rcError(w, http.StatusForbidden, path, "This action isn't available in the Appbox web UI.")
+		rcError(w, http.StatusBadRequest, path, "This action isn't available in the Appbox web UI.")
 		return
 	}
 
@@ -238,7 +244,7 @@ func (g *gateway) serveRC(w http.ResponseWriter, r *http.Request) {
 		}
 		params := queryParams(r.URL.Query())
 		if err := g.checkFsParams(params); err != nil {
-			rcError(w, http.StatusForbidden, path, err.Error())
+			rcError(w, http.StatusBadRequest, path, err.Error())
 			return
 		}
 		g.forward(w, r, path, r.URL.RawQuery, r.Header.Get("Content-Type"), r.Body)
@@ -260,7 +266,7 @@ func (g *gateway) serveRC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := g.checkFsParams(params); err != nil {
-		rcError(w, http.StatusForbidden, path, err.Error())
+		rcError(w, http.StatusBadRequest, path, err.Error())
 		return
 	}
 
@@ -270,12 +276,12 @@ func (g *gateway) serveRC(w http.ResponseWriter, r *http.Request) {
 		return
 	case "core/command":
 		if err := g.checkCommand(params); err != nil {
-			rcError(w, http.StatusForbidden, path, err.Error())
+			rcError(w, http.StatusBadRequest, path, err.Error())
 			return
 		}
 	case "config/setpath":
 		if p, _ := params["path"].(string); filepath.Clean(p) != g.s.ConfigPath {
-			rcError(w, http.StatusForbidden, path, "The config file stays at "+g.s.ConfigPath+" on Appbox.")
+			rcError(w, http.StatusBadRequest, path, "The config file stays at "+g.s.ConfigPath+" on Appbox.")
 			return
 		}
 	case "config/create":
@@ -482,7 +488,7 @@ func (g *gateway) handleOptionsSet(w http.ResponseWriter, r *http.Request, param
 	for block, v := range params {
 		denied, ok := optionBlocksAllowed[block]
 		if !ok {
-			rcError(w, http.StatusForbidden, "options/set", fmt.Sprintf("The %q options can't be changed on Appbox.", block))
+			rcError(w, http.StatusBadRequest, "options/set", fmt.Sprintf("The %q options can't be changed on Appbox.", block))
 			return
 		}
 		fields := objectParam(v)
@@ -496,7 +502,7 @@ func (g *gateway) handleOptionsSet(w http.ResponseWriter, r *http.Request, param
 				if block == "log" && field == "File" {
 					msg = "Logs are kept in the logs folder of this app; the log file can't be moved."
 				}
-				rcError(w, http.StatusForbidden, "options/set", msg)
+				rcError(w, http.StatusBadRequest, "options/set", msg)
 				return
 			}
 		}

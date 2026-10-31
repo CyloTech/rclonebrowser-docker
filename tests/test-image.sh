@@ -6,10 +6,15 @@
 #
 # Usage: tests/test-image.sh <image>
 # Needs Docker with /dev/fuse. Everything it creates is removed on exit.
+# On the shared builder, set CYLO_JOB to the build's job id: every container,
+# volume and network then carries the label cylo.job=<id> and its name.
 set -u
 
 image=${1:?usage: tests/test-image.sh <image>}
-run_id="rclone-test-$$"
+job=${CYLO_JOB:-$$}
+case "${job}" in *[!A-Za-z0-9_.-]*) echo "bad CYLO_JOB" >&2; exit 2 ;; esac
+run_id="rclone-test-${job}"
+label=(--label "cylo.job=${job}")
 net="${run_id}-net"
 app="${run_id}-app"
 client="${run_id}-client"
@@ -28,13 +33,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker network create "${net}" >/dev/null
-docker run -d --name "${client}" --network "${net}" alpine:3.24 sleep 3600 >/dev/null
+docker network create "${label[@]}" "${net}" >/dev/null
+docker run -d "${label[@]}" --name "${client}" --network "${net}" alpine:3.24 sleep 3600 >/dev/null
 docker exec "${client}" apk add -q --no-cache curl jq openssh-client sshpass >/dev/null
 
 start_app() {
     local name=$1 prefix=$2 password=$3
-    docker run -d --name "${name}" --network "${net}" --network-alias "${name}" \
+    docker run -d "${label[@]}" --name "${name}" --network "${net}" --network-alias "${name}" \
         --cap-add SYS_ADMIN --device /dev/fuse --security-opt apparmor=unconfined \
         -e USER_ID=1000 -e GROUP_ID=1000 -e VNC_PASSWORD="${password}" \
         -e PORT=2222 -e DOMAIN="${name}" -e SKIP_APPBOX_CALLBACK=1 \
@@ -75,9 +80,7 @@ sshc() {
 
 mounted_in_app() { docker exec "$1" sh -c "grep -q ' $2 fuse' /proc/mounts"; }
 
-docker volume create "${run_id}-config" >/dev/null
-docker volume create "${run_id}-data" >/dev/null
-docker volume create "${run_id}-shared" >/dev/null
+for v in config data shared; do docker volume create "${label[@]}" "${run_id}-${v}" >/dev/null; done
 start_app "${app}" "${run_id}" "${pass1}"
 wait_ready "${app}" || exit 1
 
@@ -179,8 +182,8 @@ r=$(rc "${app}" "${pass2}" mount/listmounts)
 [[ "$r" != *'/shared_mounts/local1'* ]] && pass "unmounted mount stays off after restart" || fail "came back: $r"
 
 # --- migration from the Rclone Browser versions ------------------------------------
-for v in config data shared; do docker volume create "${run_id}-legacy-${v}" >/dev/null; done
-docker run --rm -v "${run_id}-legacy-config:/c" -v "${run_id}-legacy-data:/d" -v "${run_id}-legacy-shared:/s" alpine:3.24 sh -c '
+for v in config data shared; do docker volume create "${label[@]}" "${run_id}-legacy-${v}" >/dev/null; done
+docker run --rm "${label[@]}" -v "${run_id}-legacy-config:/c" -v "${run_id}-legacy-data:/d" -v "${run_id}-legacy-shared:/s" alpine:3.24 sh -c '
     printf "[legacy]\ntype = alias\nremote = /APPBOX_DATA/old\n\n[unused]\ntype = alias\nremote = /APPBOX_DATA/old\n" > /c/rclone.conf
     echo "--vfs-cache-mode full --allow-other --buffer-size 32M --drive-chunk-size 64M" > /c/mount_opts
     mkdir -p /d/old /s/legacy && echo migrated > /d/old/file.txt

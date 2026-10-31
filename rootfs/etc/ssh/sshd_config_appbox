@@ -47,6 +47,5 @@ ClientAliveInterval 60
 ClientAliveCountMax 3
 
 PrintMotd no
-PrintLastLog no
 UseDNS no
 LogLevel INFO

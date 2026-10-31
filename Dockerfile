@@ -9,9 +9,11 @@
 ARG RCLONE_VERSION=v1.75.2
 ARG RCLONE_COMMIT=71fcb8ebd9a77c46a5fe4701ead9dff9bf4dd85d
 
-FROM golang:1.26-alpine AS rclone
+# The Go stages run on the build machine and cross-compile for the target.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS rclone
 ARG RCLONE_VERSION
 ARG RCLONE_COMMIT
+ARG TARGETARCH
 RUN apk add --no-cache git
 WORKDIR /src
 RUN git init -q . \
@@ -19,20 +21,21 @@ RUN git init -q . \
     && git fetch -q --depth 1 origin "${RCLONE_COMMIT}" \
     && git checkout -q FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "${RCLONE_COMMIT}"
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath \
         -ldflags "-s -X github.com/rclone/rclone/fs.Version=${RCLONE_VERSION}" \
         -o /out/rclone . \
     && mkdir -p /out/rclone-web \
     && unzip -q cmd/gui/dist.zip -d /out/rclone-web
 
 # The gateway, the SSH login shell and the password tool.
-FROM golang:1.26-alpine AS helper
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS helper
+ARG TARGETARCH
 WORKDIR /src
 COPY appbox-rclone/go.mod appbox-rclone/go.sum ./
 RUN go mod download
 COPY appbox-rclone/ ./
 RUN CGO_ENABLED=0 go test ./... \
-    && CGO_ENABLED=0 go build -trimpath -ldflags=-s -o /out/appbox-rclone .
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -ldflags=-s -o /out/appbox-rclone .
 
 FROM alpine:3.24
 RUN apk add --no-cache \

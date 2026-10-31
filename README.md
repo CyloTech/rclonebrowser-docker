@@ -13,6 +13,10 @@ commands only.
 | `sshd` | root | SSH on `$PORT`. Logins run `rclone-ssh`, which runs a limited set of rclone commands and never a shell. |
 | `appbox-callback` | root | Sends the installed callback once after the first start. |
 
+The catalogue version must use `init: 0`. s6-overlay v3 only runs as PID 1,
+so with Docker's `--init` the container restarts with "s6-overlay-suexec:
+fatal: can only run as pid 1".
+
 rclone is built from the `appbox/v1.75.2` branch of
 [CyloTech/rclone](https://github.com/CyloTech/rclone): upstream v1.75.2 with
 `lib/appbox`, which removes every option that runs an external program and

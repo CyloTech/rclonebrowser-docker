@@ -30,7 +30,8 @@ bash tests/test-image.sh "${image_ref}"
 # ID and runs the app as USER_ID = that ID + 1000. Run the tests again on a
 # copy of the image with that ownership (set-user-ID bits kept), as the
 # app sees it in production.
-owned_ref="rclone-gate-owned-${CYLO_JOB:-$$}:test"
+# Image names must be lowercase; builder job ids are mixed case.
+owned_ref="rclone-gate-owned-$(printf '%s' "${CYLO_JOB:-$$}" | tr '[:upper:]' '[:lower:]'):test"
 case "${owned_ref}" in *[!A-Za-z0-9._:-]*) echo "bad CYLO_JOB" >&2; exit 2 ;; esac
 trap 'docker image rm "${owned_ref}" >/dev/null 2>&1 || true' EXIT
 printf '%s\n' \

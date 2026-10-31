@@ -8,6 +8,8 @@
 # Needs Docker with /dev/fuse. Everything it creates is removed on exit.
 # On the shared builder, set CYLO_JOB to the build's job id: every container,
 # volume and network then carries the label cylo.job=<id> and its name.
+# TEST_USER_ID sets USER_ID/GROUP_ID for the app (default 1000). Containers get
+# the same tmpfs mounts on /run, /tmp and /var/tmp as on Appbox.
 set -u
 
 image=${1:?usage: tests/test-image.sh <image>}
@@ -15,6 +17,8 @@ job=${CYLO_JOB:-$$}
 case "${job}" in *[!A-Za-z0-9_.-]*) echo "bad CYLO_JOB" >&2; exit 2 ;; esac
 run_id="rclone-test-${job}"
 label=(--label "cylo.job=${job}")
+uid=${TEST_USER_ID:-1000}
+case "${uid}" in '' | *[!0-9]*) echo "bad TEST_USER_ID" >&2; exit 2 ;; esac
 net="${run_id}-net"
 app="${run_id}-app"
 client="${run_id}-client"
@@ -41,7 +45,8 @@ start_app() {
     local name=$1 prefix=$2 password=$3
     docker run -d "${label[@]}" --name "${name}" --network "${net}" --network-alias "${name}" \
         --cap-add SYS_ADMIN --device /dev/fuse --security-opt apparmor=unconfined \
-        -e USER_ID=1000 -e GROUP_ID=1000 -e VNC_PASSWORD="${password}" \
+        --tmpfs /run:rw,exec,mode=1777 --tmpfs /tmp:rw,exec,mode=1777 --tmpfs /var/tmp:rw,exec,mode=1777 \
+        -e USER_ID="${uid}" -e GROUP_ID="${uid}" -e VNC_PASSWORD="${password}" \
         -e PORT=2222 -e DOMAIN="${name}" -e SKIP_APPBOX_CALLBACK=1 \
         -v "${prefix}-config:/rclone_config" -v "${prefix}-data:/APPBOX_DATA" \
         -v "${prefix}-shared:/shared_mounts" \
@@ -185,11 +190,11 @@ r=$(rc "${app}" "${pass2}" mount/listmounts)
 
 # --- migration from the Rclone Browser versions ------------------------------------
 for v in config data shared; do docker volume create "${label[@]}" "${run_id}-legacy-${v}" >/dev/null; done
-docker run --rm "${label[@]}" -v "${run_id}-legacy-config:/c" -v "${run_id}-legacy-data:/d" -v "${run_id}-legacy-shared:/s" alpine:3.24 sh -c '
+docker run --rm "${label[@]}" -e TEST_UID="${uid}" -v "${run_id}-legacy-config:/c" -v "${run_id}-legacy-data:/d" -v "${run_id}-legacy-shared:/s" alpine:3.24 sh -c '
     printf "[legacy]\ntype = alias\nremote = /APPBOX_DATA/old\n\n[unused]\ntype = alias\nremote = /APPBOX_DATA/old\n" > /c/rclone.conf
     echo "--vfs-cache-mode full --allow-other --buffer-size 32M --drive-chunk-size 64M" > /c/mount_opts
     mkdir -p /d/old /s/legacy && echo migrated > /d/old/file.txt
-    chown -R 1000:1000 /c /d /s'
+    chown -R "${TEST_UID}:${TEST_UID}" /c /d /s'
 start_app "${app}-legacy" "${run_id}-legacy" "${pass1}"
 wait_ready "${app}-legacy" || exit 1
 for _ in $(seq 1 20); do mounted_in_app "${app}-legacy" /shared_mounts/legacy && break; sleep 1; done

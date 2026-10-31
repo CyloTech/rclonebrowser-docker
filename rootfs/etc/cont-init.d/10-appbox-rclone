@@ -40,6 +40,14 @@ if [[ ! -c /dev/fuse ]]; then
     echo "/dev/fuse is missing, so mounts won't work" >&2
 fi
 
+# Appbox's Docker gives the files root owns in the image to the Cylo's own
+# user ID. fusermount3 then runs set-user-ID as that user and can't mount,
+# and sshd refuses a privilege-separation directory root doesn't own. Put
+# back the root ownership both rely on.
+chown root:root /usr/bin/fusermount3 /var/empty
+chmod 4755 /usr/bin/fusermount3
+chmod 755 /var/empty
+
 # Appbox state: the password hashes and saved mounts and options belong
 # to the gateway; the SSH host keys stay with root.
 mkdir -p "${state}/ssh"

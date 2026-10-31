@@ -26,6 +26,21 @@ tag="${repo_and_tag##*:}"
 bash tests/test-installed-callback.sh
 bash tests/test-image.sh "${image_ref}"
 
+# Appbox's Docker gives files root owns in the image to the Cylo's own user
+# ID and runs the app as USER_ID = that ID + 1000. Run the tests again on a
+# copy of the image with that ownership (set-user-ID bits kept), as the
+# app sees it in production.
+owned_ref="rclone-gate-owned-${CYLO_JOB:-$$}:test"
+case "${owned_ref}" in *[!A-Za-z0-9._:-]*) echo "bad CYLO_JOB" >&2; exit 2 ;; esac
+trap 'docker image rm "${owned_ref}" >/dev/null 2>&1 || true' EXIT
+printf '%s\n' \
+    "FROM ${image_ref}" \
+    "RUN find / -xdev -type f -perm -4000 > /tmp/suid \\" \
+    "    && find / -xdev \\( -path /proc -o -path /sys -o -path /dev -o -path /etc/hosts -o -path /etc/resolv.conf -o -path /etc/hostname \\) -prune -o -user 0 -exec chown -h 54888096:54888096 {} + \\" \
+    "    && xargs -r chmod u+s < /tmp/suid && rm /tmp/suid" \
+    | docker build --builder default --platform linux/amd64 -q -t "${owned_ref}" - >/dev/null
+CYLO_JOB="${CYLO_JOB:-$$}-owned" TEST_USER_ID=54889096 bash tests/test-image.sh "${owned_ref}"
+
 # The registry credential goes to curl on stdin, not on its command line.
 auth="$(python3 -I -c 'import json,sys,os; print(json.load(open(os.path.expanduser("~/.docker/config.json")))["auths"][sys.argv[1]]["auth"])' "${registry}")"
 status="$(printf 'header = "Authorization: Basic %s"\n' "${auth}" | curl -s -o /dev/null -w '%{http_code}' --max-time 30 \

@@ -38,12 +38,15 @@ RUN CGO_ENABLED=0 go test ./... \
     && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -ldflags=-s -o /out/appbox-rclone .
 
 FROM alpine:3.24
-RUN apk add --no-cache \
+# openssh-server 10.3_p1-r2 is the first Alpine 3.24 build with the fix for
+# the musl password authentication bypass (OpenSSH 10.6p2).
+RUN apk upgrade --no-cache \
+    && apk add --no-cache \
         bash \
         ca-certificates \
         curl \
         fuse3 \
-        openssh-server \
+        'openssh-server>=10.3_p1-r2' \
         openssl \
         s6-overlay \
         tzdata \

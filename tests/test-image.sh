@@ -164,30 +164,13 @@ else
 fi
 
 # --- OpenSSH password bypass ----------------------------------------------------
-# Before OpenSSH 10.6p2 (Alpine 3.24 openssh 10.3_p1-r2), sshd on musl without
-# PAM let a password of 257 to 1024 bytes log in to an account whose shadow
-# password is "*" whenever another account had a $5$ or $6$ hash. The app's
-# sshd allows only rclone, so a second sshd allows two probe users: one with
-# a "*" password and one with a real password, which shows that it accepts
-# logins at all.
+# OpenSSH 10.6p2 (Alpine 3.24 openssh 10.3_p1-r2) fixes a password bypass on
+# musl without PAM. Whether a given image can be exploited depends on its
+# account layout, and a long-password login attempt doesn't reproduce it on
+# v1.75.2-1, so this checks the package build instead.
 openssh=$(docker exec "${app}" apk info -e -v openssh-server 2>/dev/null)
 [[ $(docker exec "${app}" apk version -t "${openssh#openssh-server-}" 10.3_p1-r2) != '<' ]] &&
     pass "openssh-server is 10.3_p1-r2 or later (${openssh})" || fail "old openssh-server: ${openssh:-none}"
-docker exec "${app}" sh -c 'adduser -D -s /bin/sh probe && adduser -D -s /bin/sh probeok \
-    && sed -i "s/^probe:[^:]*:/probe:*:/" /etc/shadow \
-    && echo "probeok:$(echo probe-password-123 | openssl passwd -6 -stdin)" | chpasswd -e' >/dev/null 2>&1
-docker exec "${app}" /usr/sbin/sshd -f /etc/ssh/sshd_config_appbox -p 2299 -o PidFile=/run/sshd-probe.pid \
-    -o 'AllowUsers=probe probeok' -o PasswordAuthentication=yes -o PerSourcePenalties=no \
-    -o 'ForceCommand=echo probe-login' >/dev/null 2>&1
-probe_ssh() {
-    docker exec "${client}" sshpass -p "$2" ssh -p 2299 -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o PubkeyAuthentication=no "$1@${app}" 2>&1
-}
-out=$(probe_ssh probeok probe-password-123)
-[[ "$out" == *probe-login* ]] && pass "probe sshd accepts a real password" || fail "probe sshd: $out"
-out=$(probe_ssh probe "$(printf 'x%.0s' $(seq 1 300))")
-[[ "$out" != *probe-login* ]] && pass "300-byte password doesn't log in to a '*' account" || fail "password bypass: $out"
-docker exec "${app}" sh -c 'kill "$(cat /run/sshd-probe.pid)"; deluser --remove-home probe; deluser --remove-home probeok' >/dev/null 2>&1
 
 # --- password reset -------------------------------------------------------------
 docker exec "${app}" /moduser.sh "${pass2}" >/dev/null
